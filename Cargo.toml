@@ -1,0 +1,10 @@
+[package]
+name = "bank-deposit-manager"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+calamine = { version = "0.22.1", features = ["dates"] }
+chrono = "0.4.31"
+colored = "2.0.4"
+serde = { version = "1.0.193", features = ["derive"] }

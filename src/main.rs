@@ -1,8 +1,15 @@
 mod utils;
-use std::{collections::HashMap, error::Error, str::FromStr};
+use notify_rust::{Hint, Notification};
+use std::{
+    collections::HashMap,
+    error::Error,
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use calamine::{open_workbook, DataType, Ods, RangeDeserializerBuilder, Reader};
-use chrono::{Months, NaiveDateTime};
+use chrono::{Duration, Months, NaiveDateTime};
+use clap::Parser;
 use colored::Colorize;
 use serde::{de::DeserializeOwned, Deserialize};
 use std::io::{Read, Seek};
@@ -10,6 +17,20 @@ use std::io::{Read, Seek};
 const GRAPH_TOTAL_DAYS: f32 = 365.0;
 const GRAPH_CELL_DAYS: f32 = 3.0;
 const MIN_BENEFIT: f32 = 10.0;
+const UP_TO_DATE_SECONDS: i64 = 14 * 24 * 60 * 60;
+
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Path to the spreadsheet file with data
+    #[arg(short, long)]
+    data: String,
+
+    /// Minimal output with Desktop notifications
+    #[arg(short, long, default_value_t = false)]
+    notifications: bool,
+}
 
 #[derive(Deserialize, Debug, PartialEq, Clone, Copy)]
 enum DepositStatus {
@@ -47,10 +68,24 @@ struct Bank {
     pay_strategy: PayStrategy,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let path = format!("{}/samples/data.ods", env!("CARGO_MANIFEST_DIR"));
+fn main() {
+    let args = Args::parse();
+    let res = run_app(&args);
+    if let Err(err) = res {
+        if args.notifications {
+            notify(format!("{}", err.to_string()).as_str());
+        } else {
+            println!("{:?}", err);
+        }
+    }
+}
+
+fn run_app(args: &Args) -> Result<(), Box<dyn Error>> {
+    // let path = format!("{}/samples/data.ods", env!("CARGO_MANIFEST_DIR"));
+
+    let path = &args.data;
     // let path = std::fs::read_to_string(".path")?;
-    println!("File: {}", path.bold());
+    // println!("File: {}", path.bold());
     let mut doc: Ods<_> = open_workbook(path)?;
 
     let deposits_own: Vec<Deposit> = read_sheet(&mut doc, "Deposits")?;
@@ -61,14 +96,55 @@ fn main() -> Result<(), Box<dyn Error>> {
     let banks_own: Vec<Bank> = read_sheet(&mut doc, "Banks")?;
     let banks: Vec<&Bank> = banks_own.iter().collect();
 
-    println!();
-    println!("{}", "   Graphics   ".bold().black().on_yellow());
-    print_deposit_graph(&deposits);
+    if args.notifications {
+        notify_exists_expired(&args.data)?;
+        notify_outdated_data(&deposits)?;
+    } else {
+        println!();
+        println!("{}", "   Graphics   ".bold().black().on_yellow());
+        print_deposit_graph(&deposits);
 
-    println!();
-    println!("{}", "   Suggestions   ".bold().black().on_yellow());
-    print_suggestions(&deposits, &banks);
+        println!();
+        println!("{}", "   Suggestions   ".bold().black().on_yellow());
+        print_suggestions(&deposits, &banks);
+    }
 
+    Ok(())
+}
+
+fn notify(message: &str) {
+    Notification::new()
+        .summary("Bank Deposit Manager")
+        .body(message)
+        .hint(Hint::Resident(true))
+        .timeout(0)
+        .show()
+        .unwrap();
+}
+
+fn notify_exists_expired(path: &String) -> Result<(), Box<dyn Error>> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    let modified = std::fs::metadata(path)?
+        .modified()?
+        .duration_since(UNIX_EPOCH)?
+        .as_secs() as i64;
+    let age = Duration::seconds(now - modified);
+    if age.num_seconds() > UP_TO_DATE_SECONDS {
+        notify(format!("Data outdated. Last update {} days ago", age.num_days()).as_str());
+    }
+    Ok(())
+}
+
+fn notify_outdated_data(deposits: &Vec<&Deposit>) -> Result<(), Box<dyn Error>> {
+    let now = chrono::offset::Local::now().naive_local();
+    for dep in deposits {
+        let duration = dep.date_close - dep.date_open;
+        let opened_ago = now - dep.date_open;
+        let close_days = (duration - opened_ago).num_days();
+        if close_days < 0 {
+            notify("Expired deposits have been found");
+        }
+    }
     Ok(())
 }
 
@@ -215,7 +291,7 @@ fn print_deposit_graph(deposits: &Vec<&Deposit>) {
         let duration_days = duration.num_days();
         let opened_ago = now - dep.date_open;
         let close_days = (duration - opened_ago).num_days();
-        let close_str = if close_days > 0 {
+        let close_str = if close_days >= 0 {
             close_days.to_string().green()
         } else {
             close_days.to_string().red().blink()

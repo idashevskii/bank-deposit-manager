@@ -283,6 +283,10 @@ fn print_deposit_graph(deposits: &Vec<&Deposit>) {
 
     let now = chrono::offset::Local::now().naive_local();
 
+    let mut total_amount: f32 = 0.0;
+    let mut weighted_percent: f32 = 0.0;
+    let mut earn_per_day: f32 = 0.0;
+
     for dep in deposits {
         let earned_now = calc_depo_earn(dep, now);
         let earn_max = calc_depo_earn(dep, dep.date_close);
@@ -326,7 +330,27 @@ fn print_deposit_graph(deposits: &Vec<&Deposit>) {
             " ".repeat(bar_shift as usize),
             "#".repeat(bar_len as usize).bold().purple().on_purple(),
         ));
+
+        total_amount += dep.amount;
+        weighted_percent += dep.amount * dep.percent;
+        earn_per_day += earn_max / duration_days as f32;
     }
+
+    graph_lines.push("".to_string());
+    graph_lines.push(format!(
+        "{} {:.2}k  {} {:.2}%  {} {:.2}k",
+        "Sum:".bold(),
+        total_amount / 1000.0,
+        "Average percent:".bold(),
+        100.0
+            * if total_amount > 0.0 {
+                weighted_percent / total_amount
+            } else {
+                0.0
+            },
+        "Monthly earn:".bold(),
+        earn_per_day * 30.5 / 1000.0
+    ));
 
     for line in graph_lines {
         println!("{line}");
